@@ -1210,7 +1210,10 @@ class Message(ABC):
                 value = value > 0
             elif meta.proto_type == TYPE_ENUM:
                 # Convert enum ints to python enum instances
-                value = self._betterproto.cls_by_field[field_name].try_value(value)
+                classes = cls._betterproto_meta._get_cls_by_field(
+                    cls, dataclasses.fields(cls)
+                )
+                value = classes[field_name].try_value(value)
         elif wire_type in (WIRE_FIXED_32, WIRE_FIXED_64):
             fmt = _pack_fmt(meta.proto_type)
             value = struct.unpack(fmt, value)[0]
@@ -1333,7 +1336,7 @@ class Message(ABC):
             elif isinstance(current, list) and not isinstance(value, list):
                 current.append(value)
             else:
-                cls_dict[field_name] = current
+                cls_dict[field_name] = value
 
             # If we have now loaded the expected length of the message, stop
             if size is not None:
