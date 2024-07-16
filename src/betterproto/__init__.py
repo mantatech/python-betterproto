@@ -1191,8 +1191,9 @@ class Message(ABC):
             # it should result in its zero value.
             return t
 
+    @classmethod
     def _postprocess_single(
-        self, wire_type: int, meta: FieldMetadata, field_name: str, value: Any
+        cls, wire_type: int, meta: FieldMetadata, field_name: str, value: Any
     ) -> Any:
         """Adjusts values after parsing."""
         if wire_type == WIRE_VARINT:
@@ -1217,21 +1218,27 @@ class Message(ABC):
             if meta.proto_type == TYPE_STRING:
                 value = str(value, "utf-8")
             elif meta.proto_type == TYPE_MESSAGE:
-                cls = self._betterproto.cls_by_field[field_name]
+                classes = cls._betterproto_meta._get_cls_by_field(
+                    cls, dataclasses.fields(cls)
+                )
+                cls_by_field = classes[field_name]
 
-                if cls == datetime:
+                if cls_by_field == datetime:
                     value = _Timestamp().parse(value).to_datetime()
-                elif cls == timedelta:
+                elif cls_by_field == timedelta:
                     value = _Duration().parse(value).to_timedelta()
                 elif meta.wraps:
                     # This is a Google wrapper value message around a single
                     # scalar type.
                     value = _get_wrapper(meta.wraps)().parse(value).value
                 else:
-                    value = cls().parse(value)
+                    value = cls_by_field.parse(value)
                     value._serialized_on_wire = True
             elif meta.proto_type == TYPE_MAP:
-                value = self._betterproto.cls_by_field[field_name]().parse(value)
+                classes = cls._betterproto_meta._get_cls_by_field(
+                    cls, dataclasses.fields(cls)
+                )
+                value = classes[field_name].parse(value)
 
         return value
 
@@ -1242,8 +1249,9 @@ class Message(ABC):
             meta.group is not None and self._group_current.get(meta.group) == field_name
         )
 
+    @classmethod
     def load(
-        self: T,
+        cls: T,
         stream: "SupportsRead[bytes]",
         size: Optional[int] = None,
     ) -> T:
@@ -1270,13 +1278,21 @@ class Message(ABC):
             size, _ = load_varint(stream)
 
         # Got some data over the wire
-        self._serialized_on_wire = True
-        proto_meta = self._betterproto
+
+        # self._serialized_on_wire = True
+        _serialized_on_wire = True
+        _unknown_fields = bytes()
+
+        proto_meta = cls._betterproto
         read = 0
+    
+        cls_fields = {field.name: field for field in dataclasses.fields(cls)}
+        cls_dict = {}
+
         for parsed in load_fields(stream):
             field_name = proto_meta.field_name_by_number.get(parsed.number)
             if not field_name:
-                self._unknown_fields += parsed.raw
+                _unknown_fields += parsed.raw
                 continue
 
             meta = proto_meta.meta_by_field_name[field_name]
@@ -1296,20 +1312,20 @@ class Message(ABC):
                     else:
                         decoded, pos = decode_varint(parsed.value, pos)
                         wire_type = WIRE_VARINT
-                    decoded = self._postprocess_single(
+                    decoded = cls._postprocess_single(
                         wire_type, meta, field_name, decoded
                     )
                     value.append(decoded)
             else:
-                value = self._postprocess_single(
+                value = cls._postprocess_single(
                     parsed.wire_type, meta, field_name, parsed.value
                 )
 
             try:
-                current = getattr(self, field_name)
-            except AttributeError:
-                current = self._get_field_default(field_name)
-                setattr(self, field_name, current)
+                current = cls_dict[field_name]
+            except KeyError:
+                current = cls._get_field_default(cls, field_name)
+                cls_dict[field_name] = current
 
             if meta.proto_type == TYPE_MAP:
                 # Value represents a single key/value pair entry in the map.
@@ -1317,7 +1333,7 @@ class Message(ABC):
             elif isinstance(current, list) and not isinstance(value, list):
                 current.append(value)
             else:
-                setattr(self, field_name, value)
+                cls_dict[field_name] = current
 
             # If we have now loaded the expected length of the message, stop
             if size is not None:
@@ -1339,9 +1355,14 @@ class Message(ABC):
                 " or the expected size may have been incorrect."
             )
 
-        return self
+        instance = cls(**cls_dict)
+        instance._serialized_on_wire = _serialized_on_wire
+        instance._unknown_fields = _unknown_fields
 
-    def parse(self: T, data: bytes) -> T:
+        return instance
+
+    @classmethod
+    def parse(cls: T, data: bytes) -> T:
         """
         Parse the binary encoded Protobuf into this message instance. This
         returns the instance itself and is therefore assignable and chainable.
@@ -1357,7 +1378,7 @@ class Message(ABC):
             The initialized message.
         """
         with BytesIO(data) as stream:
-            return self.load(stream)
+            return cls.load(stream)
 
     # For compatibility with other libraries.
     @classmethod
@@ -1381,7 +1402,7 @@ class Message(ABC):
         :class:`Message`
             The initialized message.
         """
-        return cls().parse(data)
+        return cls.parse(data)
 
     def to_dict(
         self, casing: Casing = Casing.CAMEL, include_default_values: bool = False
