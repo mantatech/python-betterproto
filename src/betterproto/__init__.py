@@ -787,7 +787,7 @@ class Message(ABC):
                 field_name=field_name, meta=meta
             )
 
-            if value == self._get_field_default(field_name) and not (
+            if not dataclasses.is_dataclass(value) and value == self._get_field_default(field_name) and not (
                 selected_in_group or serialize_empty or include_default_value_for_oneof
             ):
                 # Default (zero) values are not serialized. Two exceptions are
@@ -1102,8 +1102,12 @@ class Message(ABC):
             cls._betterproto_meta = proto_meta  # type: ignore
 
         cls_dict = {
-            field.name: proto_meta.default_gen[field.name]()
+            field.name: proto_meta.default_gen[field.name]
             for field in dataclasses.fields(cls)
+        }
+        cls_dict = {
+            field_name: None if dataclasses.is_dataclass(cls_field) else cls_field()
+            for field_name, cls_field in cls_dict.items()
         }
         for parsed in parse_fields(data):
             field_name = proto_meta.field_name_by_number.get(parsed.number)
@@ -1173,10 +1177,10 @@ class Message(ABC):
         :class:`Message`
             The initialized message.
         """
-        try:
-            return cls().parse(data)
-        except:
-            return cls.cls_parse(data)
+        # try:
+        #     return cls().parse(data)
+        # except:
+        return cls.cls_parse(data)
 
     def to_dict(
         self, casing: Casing = Casing.CAMEL, include_default_values: bool = False
