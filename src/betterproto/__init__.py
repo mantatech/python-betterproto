@@ -1101,8 +1101,10 @@ class Message(ABC):
             proto_meta = ProtoClassMetadata(cls)
             cls._betterproto_meta = proto_meta  # type: ignore
 
-        cls_fields = {field.name: field for field in dataclasses.fields(cls)}
-        cls_dict = {}
+        cls_dict = {
+            field.name: proto_meta.default_gen[field.name]()
+            for field in dataclasses.fields(cls)
+        }
         for parsed in parse_fields(data):
             field_name = proto_meta.field_name_by_number.get(parsed.number)
             if not field_name:
@@ -1135,18 +1137,14 @@ class Message(ABC):
                     parsed.wire_type, meta, field_name, parsed.value
                 )
 
-            current = cls_fields[field_name]
+            current = cls_dict[field_name]
             if meta.proto_type == TYPE_MAP:
                 # Value represents a single key/value pair entry in the map.
                 current[value.key] = value.value
-            elif isinstance(current.type, list) and not isinstance(value, list):
+            elif isinstance(current, list) and not isinstance(value, list):
                 current.append(value)
             else:
                 cls_dict[field_name] = value
-
-        missing_fields = cls_fields.keys() - cls_dict.keys()
-        for field_name in missing_fields:
-            cls_dict[field_name] = proto_meta.default_gen[field_name]()
 
         instance = cls(**cls_dict)
         instance._serialized_on_wire = _serialized_on_wire
@@ -1175,7 +1173,10 @@ class Message(ABC):
         :class:`Message`
             The initialized message.
         """
-        return cls().parse(data)
+        try:
+            return cls().parse(data)
+        except:
+            return cls.cls_parse(data)
 
     def to_dict(
         self, casing: Casing = Casing.CAMEL, include_default_values: bool = False
