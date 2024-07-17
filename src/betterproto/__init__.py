@@ -1144,6 +1144,10 @@ class Message(ABC):
             else:
                 cls_dict[field_name] = value
 
+        missing_fields = cls_fields.keys() - cls_dict.keys()
+        for field_name in missing_fields:
+            cls_dict[field_name] = proto_meta.default_gen[field_name]()
+
         instance = cls(**cls_dict)
         instance._serialized_on_wire = _serialized_on_wire
         instance._unknown_fields = _unknown_fields
